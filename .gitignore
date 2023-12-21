@@ -1,4 +1,5 @@
 *.log
+dataset
 
 # ---------------------- python built-in ignores ------------------------------
 # Byte-compiled / optimized / DLL files

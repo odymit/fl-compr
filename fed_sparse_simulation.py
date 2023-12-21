@@ -96,7 +96,7 @@ def test(net, testloader):
     return loss, accuracy
 
 
-NUM_CLIENTS = 3
+NUM_CLIENTS = 2
 
 
 def load_datasets(num_clients: int):
@@ -399,7 +399,7 @@ strategy = FedSparse()
 # Specify client resources if you need GPU (defaults to 1 CPU and 0 GPU)
 client_resources = None
 if DEVICE.type == "cuda":
-    client_resources = {"num_gpus": 1}
+    client_resources = {"num_cpus": 4, "num_gpus": 1}
 
 fl.simulation.start_simulation(
     strategy=strategy,
@@ -407,4 +407,5 @@ fl.simulation.start_simulation(
     num_clients=NUM_CLIENTS,
     config=fl.server.ServerConfig(num_rounds=3),
     client_resources=client_resources,
+    ray_init_args={"num_cpus": 8, "num_gpus": 2},
 )

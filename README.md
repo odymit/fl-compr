@@ -1,5 +1,7 @@
 # fl-compr
-
+## TODO
+1. topk: select topK weight and send using sparse
+2. model performance: counting model acc / loss
 ## Install Dependencies
 ```
 # need python=3.10
@@ -18,6 +20,11 @@ check out the server log in server.log
 nohup python client.py --node-id 0 > node-0.log
 # start client 2 in the second terminal
 nohup python client.py --node-id 1 > node-1.log
+```
+3. simulation
+train fed learning in a simulation way.
+```shell
+nohup python fed_sparse_simulation.py > fed_sparse.log
 ```
 check out the client log in node-id.log file.
 ## Customize the clients
