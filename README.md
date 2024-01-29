@@ -1,7 +1,9 @@
 # fl-compr
 ## TODO
-1. topk: select topK weight and send using sparse
-2. model performance: counting model acc / loss
+1. send gradient instead of model weight
+2. topk: select topK weight and send using sparse
+3. model performance: counting model acc / loss
+4. visualization of model weight change
 ## Install Dependencies
 ```
 # need python=3.10
