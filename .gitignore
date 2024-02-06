@@ -1,6 +1,12 @@
+dataset/*
+data/*
 *.log
+*.logs
 *.npy
-dataset
+*.npz
+*.pt
+*.pkl
+
 
 # ---------------------- python built-in ignores ------------------------------
 # Byte-compiled / optimized / DLL files
