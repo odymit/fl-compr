@@ -32,6 +32,9 @@ def ndarray_to_sparse_bytes(ndarray: NDArray) -> bytes:
     if len(ndarray.shape) > 1:
         # We convert our ndarray into a sparse matrix
         ndarray = torch.tensor(ndarray).to_sparse_csr()
+        print("save sparse tensor to sparse.pt")
+        shape_str = str(ndarray.shape)
+        torch.save(ndarray, f"sparse_{shape_str}.pt")
         sparse_size = calculate_sparse_tensor_size(ndarray)
         bytes_counter += sparse_size
         print("Sparse size:", sparse_size)

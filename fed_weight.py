@@ -436,15 +436,27 @@ def get_evaluate_fn(net, testloader):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Flower")
-    parser.add_argument("--mode", type=str, default="weight")
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="weight",
+        help="compression mode in 'weight, topk, randomk'",
+    )
 
     args = parser.parse_args()
 
-    # default mode compression and uncompression function
-    client_compr_fn, client_uncompr_fn = ndarrays_to_parameters, parameters_to_ndarrays
-    server_compr_fn, server_uncompr_fn = ndarrays_to_parameters, parameters_to_ndarrays
+    if args.mode == "weight":
+        # default mode compression and uncompression function
+        client_compr_fn, client_uncompr_fn = (
+            ndarrays_to_parameters,
+            parameters_to_ndarrays,
+        )
+        server_compr_fn, server_uncompr_fn = (
+            ndarrays_to_parameters,
+            parameters_to_ndarrays,
+        )
 
-    if args.mode == "topk":
+    elif args.mode == "topk":
         from compr.topk import topk_ndarrays_to_parameters, topk_parameters_to_ndarrays
 
         client_compr_fn, client_uncompr_fn = (
