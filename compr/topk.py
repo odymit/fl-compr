@@ -2,13 +2,15 @@ import numpy as np
 
 from ser.sparse import ndarrays_to_sparse_parameters, sparse_parameters_to_ndarrays
 
+from flwr.common import ndarrays_to_parameters, parameters_to_ndarrays
 
 def topk_ndarrays_to_parameters(ndarrays, k=2):
     """Return the top-k parameters from the provided list of ndarrays."""
     topk_ndarrays = []
     for ndarray in ndarrays:
         print("ndarray shape:", ndarray.shape)
-        if ndarray.ndim <= 2:
+        print("ndarray ndim:", ndarray.ndim)
+        if ndarray.ndim <= 1 and k > ndarray.size:
             # Flatten the array and get the indices of the top-k elements
             indices = np.argpartition(ndarray.flatten(), -k)[-k:]
             # Create a new array with only the top-k elements
@@ -29,8 +31,8 @@ def topk_ndarrays_to_parameters(ndarrays, k=2):
                 np.put(topk_array[index], indices, sub_array.flatten()[indices])
             topk_ndarrays.append(topk_array)
         print("topk_array shape:", topk_array.shape)
-
-    parameters = ndarrays_to_sparse_parameters(topk_ndarrays)
+    # return topk_ndarrays
+    parameters = ndarrays_to_parameters(topk_ndarrays)
     return parameters
 
 

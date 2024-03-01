@@ -60,20 +60,32 @@ def set_parameters(net, parameters: List[np.ndarray]):
     net.load_state_dict(state_dict, strict=True)
 
 
+from powersgd import Config, PowerSGD, optimizer_step
+
+
 def train(net, trainloader, epochs: int):
     """Train the network on the training set."""
     criterion = torch.nn.CrossEntropyLoss()
+    params = list(net.parameters())
     optimizer = torch.optim.SGD(net.parameters(), lr=0.1)
+    powersgd = PowerSGD(
+        params,
+        config=Config(
+            rank=1,  # lower rank => more aggressive compression
+            min_compression_rate=10,  # don't compress gradients with less compression
+            num_iters_per_step=2,  #   # lower number => more aggressive compression
+            start_compressing_after_num_steps=0,
+        ),
+    )
     net.train()
     for epoch in range(epochs):
         correct, total, epoch_loss = 0, 0, 0.0
         for images, labels in tqdm(trainloader):
             images, labels = images.to(DEVICE), labels.to(DEVICE)
-            optimizer.zero_grad()
             outputs = net(images)
             loss = criterion(net(images), labels)
             loss.backward()
-            optimizer.step()
+            optimizer_step(optimizer, powersgd)
             # Metrics
             epoch_loss += loss
             total += labels.size(0)
