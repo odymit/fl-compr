@@ -1,6 +1,6 @@
 dataset/*
 data/*
-figures/*
+logs/*
 *.log
 *.logs
 *.npy
@@ -8,6 +8,7 @@ figures/*
 *.pt
 *.pkl
 
+.idea/*
 .vscode/*
 # ---------------------- python built-in ignores ------------------------------
 # Byte-compiled / optimized / DLL files

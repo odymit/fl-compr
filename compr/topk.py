@@ -1,8 +1,8 @@
 import numpy as np
 
-from ser.sparse import ndarrays_to_sparse_parameters, sparse_parameters_to_ndarrays
+from flwr.common import ndarrays_to_parameters
 
-from flwr.common import ndarrays_to_parameters, parameters_to_ndarrays
+from utils.eval import calc_none_zero_data, calc_zero_data
 
 def topk_ndarrays_to_parameters(ndarrays, k=2):
     """Return the top-k parameters from the provided list of ndarrays."""
@@ -31,12 +31,10 @@ def topk_ndarrays_to_parameters(ndarrays, k=2):
                 np.put(topk_array[index], indices, sub_array.flatten()[indices])
             topk_ndarrays.append(topk_array)
         print("topk_array shape:", topk_array.shape)
+    bytes = calc_none_zero_data(topk_ndarrays)
+    print("none zero bytes:", bytes)
+    zero_bytes = calc_zero_data(topk_ndarrays)
+    print("zero bytes:", zero_bytes)
     # return topk_ndarrays
     parameters = ndarrays_to_parameters(topk_ndarrays)
-    return parameters
-
-
-def topk_parameters_to_ndarrays(parameters):
-    """Return the list of ndarrays from the provided top-k parameters."""
-    ndarrays = sparse_parameters_to_ndarrays(parameters)
-    return ndarrays
+    return parameters, bytes

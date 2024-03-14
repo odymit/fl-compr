@@ -1,8 +1,6 @@
 import numpy as np
 
-from ser.sparse import ndarrays_to_sparse_parameters, sparse_parameters_to_ndarrays
-
-from flwr.common import ndarrays_to_parameters, parameters_to_ndarrays
+from flwr.common import ndarrays_to_parameters
 
 def randomk_ndarrays_to_parameters(ndarrays, k=2):
     """Return the random-k parameters from the provided list of ndarrays."""
@@ -32,14 +30,5 @@ def randomk_ndarrays_to_parameters(ndarrays, k=2):
             randomk_ndarrays.append(rdk_array)
         print("topk_array shape:", rdk_array.shape)
     # return topk_ndarrays
-    # print("saving rdk_ndarrays to rdk_ndarrays.npz")
-    # np.savez(f"rdk_ndarrays.npz", *randomk_ndarrays)
-    # parameters = ndarrays_to_sparse_parameters(randomk_ndarrays)
     parameters = ndarrays_to_parameters(randomk_ndarrays)
     return parameters
-
-
-def randomk_parameters_to_ndarrays(parameters):
-    """Return the list of ndarrays from the provided top-k parameters."""
-    ndarrays = sparse_parameters_to_ndarrays(parameters)
-    return ndarrays
