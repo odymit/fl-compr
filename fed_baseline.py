@@ -1,31 +1,43 @@
 import argparse
-import json
+import os
 import time
 from collections import OrderedDict
-from datetime import datetime
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+# disable ray duplicate logs
+os.environ["RAY_DEDUP_LOGS"] = "0"
+
 import flwr as fl
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as transforms
 from flwr.common import ndarrays_to_parameters, parameters_to_ndarrays
+from torch.nn import GroupNorm
 from torch.utils.data import DataLoader, random_split
 from torchvision.datasets import CIFAR10
+from torchvision.models import resnet18
 from tqdm import tqdm
 
-from ser.sparse import ndarrays_to_sparse_parameters, sparse_parameters_to_ndarrays
 from utils.eval import calc_data
+from utils.io import save_results
 
 # #############################################################################
 # 1. Regular PyTorch pipeline: nn.Module, train, test, and DataLoader
 # #############################################################################
 
+
+# experiments settings
 NUM_CLIENTS = 2
+BATCH_SIZE = 128
+MOMENTUM = 0.9
+LEARNIGN_RATE = 1e-2
+WEIGHT_DECAY = 1e-4
+EPOCHS = 300
+SEED = 42
+REPEATS = 3
+WARMUP = 5
+
 # set client device using gpu or cpu
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(
@@ -33,25 +45,9 @@ print(
 )
 
 
-class Net(nn.Module):
-    """Model (simple CNN adapted from 'PyTorch: A 60 Minute Blitz')"""
-
-    def __init__(self) -> None:
-        super(Net, self).__init__()
-        self.conv1 = nn.Conv2d(3, 6, 5)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(6, 16, 5)
-        self.fc1 = nn.Linear(16 * 5 * 5, 120)
-        self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, 10)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = x.view(-1, 16 * 5 * 5)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        return self.fc3(x)
+def get_model():
+    net = resnet18(norm_layer=lambda x: GroupNorm(2, x), num_classes=10).to(DEVICE)
+    return net
 
 
 def get_parameters(net) -> List[np.ndarray]:
@@ -64,10 +60,8 @@ def set_parameters(net, parameters: List[np.ndarray]):
     net.load_state_dict(state_dict, strict=True)
 
 
-def train(net, trainloader, epochs: int):
+def train(net, trainloader, epochs: int, criterion, optimizer, scheduler):
     """Train the network on the training set."""
-    criterion = torch.nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(net.parameters(), lr=0.1)
     net.train()
     costs = []
     for epoch in range(epochs):
@@ -80,6 +74,8 @@ def train(net, trainloader, epochs: int):
             loss = criterion(net(images), labels)
             loss.backward()
             optimizer.step()
+            scheduler.step()
+            print("Learning Rate after step:", scheduler.get_last_lr())
             # Metrics
             epoch_loss += loss
             total += labels.size(0)
@@ -91,6 +87,7 @@ def train(net, trainloader, epochs: int):
         epoch_acc = correct / total
         print(f"Epoch {epoch+1}: train loss {epoch_loss}, accuracy {epoch_acc}")
 
+    # return time cost per batch
     return sum(costs) / len(costs)
 
 
@@ -123,7 +120,7 @@ def load_datasets(num_clients: int):
     # Split training set into `num_clients` partitions to simulate different local datasets
     partition_size = len(trainset) // num_clients
     lengths = [partition_size] * num_clients
-    datasets = random_split(trainset, lengths, torch.Generator().manual_seed(42))
+    datasets = random_split(trainset, lengths, torch.Generator().manual_seed(SEED))
 
     # Split each partition into train/val and create DataLoader
     trainloaders = []
@@ -132,14 +129,13 @@ def load_datasets(num_clients: int):
         len_val = len(ds) // 10  # 10 % validation set
         len_train = len(ds) - len_val
         lengths = [len_train, len_val]
-        ds_train, ds_val = random_split(ds, lengths, torch.Generator().manual_seed(42))
-        trainloaders.append(DataLoader(ds_train, batch_size=32, shuffle=True))
-        valloaders.append(DataLoader(ds_val, batch_size=32))
-    testloader = DataLoader(testset, batch_size=32)
+        ds_train, ds_val = random_split(
+            ds, lengths, torch.Generator().manual_seed(SEED)
+        )
+        trainloaders.append(DataLoader(ds_train, batch_size=BATCH_SIZE, shuffle=True))
+        valloaders.append(DataLoader(ds_val, batch_size=BATCH_SIZE))
+    testloader = DataLoader(testset, batch_size=BATCH_SIZE)
     return trainloaders, valloaders, testloader
-
-
-trainloaders, valloaders, testloader = load_datasets(NUM_CLIENTS)
 
 
 # #############################################################################
@@ -176,37 +172,48 @@ class FlowerClient(fl.client.Client):
         self.valloader = valloader
         self.uncompr_fn = uncompr_fn
         self.compr_fn = compr_fn
+        # init training parameters
 
-    # def get_parameters(self, ins: GetParametersIns) -> GetParametersRes:
-    #     print(f"[Client {self.cid}] get_parameters")
-
-    #     # Get parameters as a list of NumPy ndarray's
-    #     ndarrays: List[np.ndarray] = get_parameters(self.net)
-
-    #     # Serialize ndarray's into a Parameters object using our custom function
-    #     parameters = self.compr_fn(ndarrays)
-
-    #     bytes = sum([p.size * p.itemsize for p in ndarrays])
-    #     print(f"[Client {self.cid}] parameters byte size: {bytes}")
-    #     # Build and return response
-    #     status = Status(code=Code.OK, message="Success")
-    #     return GetParametersRes(
-    #         status=status,
-    #         parameters=parameters,
-    #     )
+        self.criterion = torch.nn.CrossEntropyLoss()
+        self.optimizer = torch.optim.SGD(
+            self.net.parameters(),
+            lr=LEARNIGN_RATE,
+            momentum=MOMENTUM,
+            weight_decay=WEIGHT_DECAY,
+        )
+        warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+            optimizer=self.optimizer, start_factor=0.1, total_iters=WARMUP
+        )
+        train_scheduler = torch.optim.lr_scheduler.MultiStepLR(
+            optimizer=self.optimizer, milestones=[150, 250], gamma=0.1
+        )
+        self.scheduler = torch.optim.lr_scheduler.SequentialLR(
+            optimizer=self.optimizer,
+            schedulers=[warmup_scheduler, train_scheduler],
+            milestones=[WARMUP],
+        )
 
     def fit(self, ins: FitIns) -> FitRes:
         print(f"[Client {self.cid}] fit, config: {ins.config}")
 
         # Deserialize parameters to NumPy ndarray's using our custom function
-        parameters_original = ins.parameters
-        ndarrays_original = self.uncompr_fn(parameters_original)
+        parameters_received = ins.parameters
+        ndarrays_received = self.uncompr_fn(parameters_received)
 
         # Update local model, train, get updated parameters
-        set_parameters(self.net, ndarrays_original)
-        time_cost_avg = train(self.net, self.trainloader, epochs=1)
+        set_parameters(self.net, ndarrays_received)
+
+        time_cost_avg = train(
+            self.net,
+            self.trainloader,
+            epochs=1,
+            criterion=self.criterion,
+            optimizer=self.optimizer,
+            scheduler=self.scheduler,
+        )
+        print(f"[Client {self.cid}] - Learning rate: {self.scheduler.get_last_lr()}")
         ndarrays_updated = get_parameters(self.net)
-        np.savez(f"client_{self.cid}_parameters.npz", *ndarrays_updated)
+        # np.savez(f"client_{self.cid}_parameters.npz", *ndarrays_updated)
         print(
             f"-------------------------------data saved for client {self.cid}-----------------------------"
         )
@@ -217,18 +224,7 @@ class FlowerClient(fl.client.Client):
             parameters_updated = self.compr_fn(ndarrays_updated)
         else:
             parameters_updated, bytes = self.compr_fn(ndarrays_updated)
-        # import pickle
 
-        # # Save parameters_updated to a file
-        # with open("parameters_updated.pkl", "wb") as f:
-        #     pickle.dump(parameters_updated, f, protocol=2)
-        # total_bytes = 0
-        # for p in parameters_updated.tensors:
-        #     total_bytes += len(p)
-        # print(f"[Client {self.cid}] compressed parameters byte size: {total_bytes}")
-        # print(
-        #     f"-------------------------------data saved for client {self.cid}-----------------------------"
-        # )
         # Build and return response
         status = Status(code=Code.OK, message="Success")
         return FitRes(
@@ -242,10 +238,10 @@ class FlowerClient(fl.client.Client):
         print(f"[Client {self.cid}] evaluate, config: {ins.config}")
 
         # Deserialize parameters to NumPy ndarray's using our custom function
-        parameters_original = ins.parameters
-        ndarrays_original = self.uncompr_fn(parameters_original)
+        parameters_received = ins.parameters
+        ndarrays_received = self.uncompr_fn(parameters_received)
 
-        set_parameters(self.net, ndarrays_original)
+        set_parameters(self.net, ndarrays_received)
         loss, accuracy = test(self.net, self.valloader)
 
         # Build and return response
@@ -357,9 +353,9 @@ class FedBaseline(FedAvg):
             # No evaluation function provided
             return None
         # We deserialize using our custom method
-        parameters_ndarrays = self.uncompr_fn(parameters)
+        ndarrays = self.uncompr_fn(parameters)
 
-        eval_res = self.evaluate_fn(server_round, parameters_ndarrays, {})
+        eval_res = self.evaluate_fn(server_round, ndarrays, {})
         if eval_res is None:
             return None
         loss, metrics = eval_res
@@ -386,10 +382,6 @@ class FedBaseline(FedAvg):
         print(
             f"-------------------------------weights_results-----------------------------"
         )
-        for parameters, num_examples in weights_results:
-            print(f"num_examples: {num_examples}")
-            for p in parameters:
-                print(f"p size: {p.shape}")
 
         # We serialize the aggregated result using our cutom method
         parameters_aggregated = self.compr_fn(aggregate(weights_results))
@@ -415,28 +407,23 @@ def get_evaluate_fn(net, testloader):
 
     # The `evaluate` function will be called after every round
     def evaluate(
-        server_round: int, parameters: NDArrays, config: Dict[str, Scalar]
+        server_round: int, parameters: List[np.ndarray], config: Dict[str, Scalar]
     ) -> Optional[Tuple[float, Dict[str, Scalar]]]:
-        params_dict = zip(net.state_dict().keys(), parameters)
-        state_dict = OrderedDict({k: torch.Tensor(v) for k, v in params_dict})
-        net.load_state_dict(state_dict, strict=True)
+        set_parameters(net, parameters)
         net.to(DEVICE)
-        # save net
-        DATA_DIR = Path("./data")
-        torch.save(net, DATA_DIR / f"server_round_{server_round}_net.pth")
         total_loss, total_correct, total_samples = 0, 0, 0
-
-        with torch.no_grad():  # Do not calculate gradients
+        # Do not calculate gradients
+        with torch.no_grad():
             for data, target in testloader:
                 data, target = data.to(DEVICE), target.to(DEVICE)
-                output = net(data)  # Forward pass
-                loss = F.cross_entropy(
-                    output, target, reduction="sum"
-                )  # Calculate loss
-                pred = output.argmax(dim=1)  # Get predictions
-                correct = (
-                    pred.eq(target.view_as(pred)).sum().item()
-                )  # Calculate correct predictions
+                # Forward pass
+                output = net(data)
+                # Calculate loss
+                loss = F.cross_entropy(output, target, reduction="sum")
+                # Get predictions
+                pred = output.argmax(dim=1)
+                # Calculate correct predictions
+                correct = pred.eq(target.view_as(pred)).sum().item()
 
                 total_loss += loss.item()
                 total_correct += correct
@@ -459,50 +446,56 @@ def get_evaluate_fn(net, testloader):
     return evaluate
 
 
+# Global variables to store metrics and final results
 metrics = {"round": [], "acc": [], "loss": []}
 final_results = {"acc": [], "data": [], "time": []}
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Flower")
+    parser = argparse.ArgumentParser(description="baseline args")
     parser.add_argument(
         "--mode",
         type=str,
-        default="weight",
-        help="compression mode in 'weight, topk, randomk'",
+        default="baseline",
+        help="compression mode in 'baseline, topk, randomk'",
     )
-    parser.add_argument("--rounds", type=int, default=3, help="number of rounds")
+    parser.add_argument("--rounds", type=int, default=EPOCHS, help="number of rounds")
+    parser.add_argument("--seed", type=int, default=SEED, help="random seed")
+    parser.add_argument(
+        "--num_clients", type=int, default=NUM_CLIENTS, help="number of clients"
+    )
 
     args = parser.parse_args()
+    SEED = args.seed
+    NUM_CLIENTS = args.num_clients
 
-    if args.mode == "weight":
-        # default mode compression and uncompression function
-        client_compr_fn, client_uncompr_fn = (
-            ndarrays_to_parameters,
-            parameters_to_ndarrays,
-        )
+    if args.mode == "baseline":
+        client_compr_fn = ndarrays_to_parameters
 
     elif args.mode == "topk":
         from compr.topk import topk_ndarrays_to_parameters
 
-        client_compr_fn, client_uncompr_fn = (
-            topk_ndarrays_to_parameters,
-            parameters_to_ndarrays,
-        )
+        client_compr_fn = topk_ndarrays_to_parameters
+
     elif args.mode == "randomk":
         from compr.randomk import randomk_ndarrays_to_parameters
 
-        client_compr_fn, client_uncompr_fn = (
-            randomk_ndarrays_to_parameters,
-            parameters_to_ndarrays,
-        )
+        client_compr_fn = randomk_ndarrays_to_parameters
+
+    # default compr & uncompr fn
+    client_uncompr_fn = parameters_to_ndarrays
     server_compr_fn, server_uncompr_fn = (
         ndarrays_to_parameters,
         parameters_to_ndarrays,
     )
+    # Load data
+    trainloaders, valloaders, testloader = load_datasets(NUM_CLIENTS)
+    # Load model
 
-    net = Net()
+    net = get_model()
 
+    # Define client_fn
     def client_fn(cid) -> FlowerClient:
-        net = Net().to(DEVICE)
+        net = get_model().to(DEVICE)
         trainloader = trainloaders[int(cid)]
         valloader = valloaders[int(cid)]
         return FlowerClient(
@@ -514,6 +507,7 @@ if __name__ == "__main__":
             compr_fn=client_compr_fn,
         )
 
+    # Define strategy
     strategy = FedBaseline(
         initial_parameters=ndarrays_to_parameters(get_parameters(net)),
         evaluate_fn=get_evaluate_fn(net=net, testloader=testloader),
@@ -526,6 +520,7 @@ if __name__ == "__main__":
     if DEVICE.type == "cuda":
         client_resources = {"num_cpus": 4, "num_gpus": 1}
 
+    # Start simulation
     fl.simulation.start_simulation(
         strategy=strategy,
         client_fn=client_fn,
@@ -534,27 +529,5 @@ if __name__ == "__main__":
         client_resources=client_resources,
         ray_init_args={"num_cpus": 8, "num_gpus": 2},
     )
-    now = datetime.now()
-    formatted_time = now.strftime("%Y-%m-%d-%H:%M:%S")
-    # Draw the acc and loss curve
-    # Create a new figure for loss
-    plt.figure()
-    plt.plot(metrics["loss"], label="Loss")
-    plt.legend()
-    prefix = [args.mode, formatted_time]
-    name = "_".join(prefix + ["loss.png"])
-    plt.savefig(f"./logs/{name}")
-
-    # Create a new figure for accuracy
-    plt.figure()
-    plt.plot(metrics["acc"], label="Accuracy")
-    plt.legend()
-    name = "_".join(prefix + ["acc.png"])
-    plt.savefig(f"./logs/{name}")
-
-    name = "_".join(prefix + ["final_results.json"])
-    with open(f"./logs/{name}", "w", encoding="utf-8") as f:
-        json.dump(final_results, f, ensure_ascii=False, indent=4)
-    name = "_".join(prefix + ["metrics.json"])
-    with open(f"./logs/{name}", "w", encoding="utf-8") as f:
-        json.dump(final_results, f, ensure_ascii=False, indent=4)
+    # Save results
+    save_results(args, metrics, final_results)

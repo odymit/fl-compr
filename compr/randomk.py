@@ -1,6 +1,8 @@
 import numpy as np
-
 from flwr.common import ndarrays_to_parameters
+
+from utils.eval import calc_none_zero_data, calc_zero_data
+
 
 def randomk_ndarrays_to_parameters(ndarrays, k=2):
     """Return the random-k parameters from the provided list of ndarrays."""
@@ -29,6 +31,10 @@ def randomk_ndarrays_to_parameters(ndarrays, k=2):
                 np.put(rdk_array[index], indices, sub_array.flatten()[indices])
             randomk_ndarrays.append(rdk_array)
         print("topk_array shape:", rdk_array.shape)
+    bytes = calc_none_zero_data(randomk_ndarrays)
+    print("none zero bytes:", bytes)
+    zero_bytes = calc_zero_data(randomk_ndarrays)
+    print("zero bytes:", zero_bytes)
     # return topk_ndarrays
     parameters = ndarrays_to_parameters(randomk_ndarrays)
-    return parameters
+    return parameters, bytes

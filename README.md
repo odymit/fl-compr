@@ -1,9 +1,6 @@
 # fl-compr
 ## TODO
-1. send gradient instead of model weight
-2. topk: select topK weight and send using sparse
-3. model performance: counting model acc / loss
-4. visualization of model weight change
+1. visualization of model weight change
 ## Install Dependencies
 ```
 # need python=3.10
@@ -15,6 +12,7 @@ pip install -r requirements.txt
 - [x] topk
 - [ ] randomk
 - [ ] quantization
+- [ ] powerSGD
 ### supported metrics
 - [x] acc
 - [x] data
