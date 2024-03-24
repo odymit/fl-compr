@@ -20,7 +20,7 @@ from torchvision.models import resnet18
 from tqdm import tqdm
 
 from utils.eval import calc_data
-from utils.io import save_results
+from utils.io import collect_data_partition, draw_data_partition, save_results
 
 # #############################################################################
 # 1. Regular PyTorch pipeline: nn.Module, train, test, and DataLoader
@@ -75,7 +75,6 @@ def train(net, trainloader, epochs: int, criterion, optimizer, scheduler):
             loss.backward()
             optimizer.step()
             scheduler.step()
-            print("Learning Rate after step:", scheduler.get_last_lr())
             # Metrics
             epoch_loss += loss
             total += labels.size(0)
@@ -85,7 +84,8 @@ def train(net, trainloader, epochs: int, criterion, optimizer, scheduler):
             costs.append(cost)
         epoch_loss /= len(trainloader.dataset)
         epoch_acc = correct / total
-        print(f"Epoch {epoch+1}: train loss {epoch_loss}, accuracy {epoch_acc}")
+        print(f"Epoch {epoch+1}: train loss {epoch_loss}, train accuracy {epoch_acc}")
+        print("Learning Rate after step:", scheduler.get_last_lr())
 
     # return time cost per batch
     return sum(costs) / len(costs)
@@ -214,9 +214,9 @@ class FlowerClient(fl.client.Client):
         print(f"[Client {self.cid}] - Learning rate: {self.scheduler.get_last_lr()}")
         ndarrays_updated = get_parameters(self.net)
         # np.savez(f"client_{self.cid}_parameters.npz", *ndarrays_updated)
-        print(
-            f"-------------------------------data saved for client {self.cid}-----------------------------"
-        )
+        # print(
+        #     f"-------------------------------data saved for client {self.cid}-----------------------------"
+        # )
         bytes = calc_data(ndarrays_updated)
         print(f"[Client {self.cid}] ndarrays byte size: {bytes}")
         # Serialize ndarray's into a Parameters object using our custom function
@@ -243,6 +243,11 @@ class FlowerClient(fl.client.Client):
 
         set_parameters(self.net, ndarrays_received)
         loss, accuracy = test(self.net, self.valloader)
+        print(
+            "[Client {}] - Evaluation loss: {}, accuracy on test set: {}".format(
+                self.cid, loss, accuracy
+            )
+        )
 
         # Build and return response
         status = Status(code=Code.OK, message="Success")
@@ -489,8 +494,11 @@ if __name__ == "__main__":
     )
     # Load data
     trainloaders, valloaders, testloader = load_datasets(NUM_CLIENTS)
+    # Collection partitioned data distribution
+    data_patitions = collect_data_partition(args, trainloaders, num_classes=10)
+    draw_data_partition(args, data_patitions)
+    
     # Load model
-
     net = get_model()
 
     # Define client_fn
