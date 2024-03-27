@@ -7,7 +7,7 @@ NUM_CLIENTS = 2
 BATCH_SIZE = 128
 MOMENTUM = 0.9
 LEARNIGN_RATE = 1e-2
-WEIGHT_DECAY = 1e-4
+WEIGHT_DECAY = 1e-3
 EPOCHS = 300
 SEED = 42
 REPEATS = 3
@@ -25,7 +25,7 @@ criterion = torch.nn.CrossEntropyLoss()
 optimizer = torch.optim.SGD(
     net.parameters(),
     lr=LEARNIGN_RATE,
-    momentum=MOMENTUM,
+    # momentum=MOMENTUM,
     weight_decay=WEIGHT_DECAY,
 )
 warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
