@@ -1,4 +1,3 @@
-# import zmq
 import argparse
 import csv
 import json
@@ -8,14 +7,14 @@ from pathlib import Path
 
 import resnet_model
 import torch
-from compr import randomk, topk
+from aggre import flavg, flpsgd, flrandomk, fltopk
 from data_pre import get_dataset
 
 
 # evaluate the model by data from data_loader
 def eval_model(model, data_loader):
     print("Start evaluating the model!")
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     model.eval()
     total_loss = 0.0
@@ -44,49 +43,27 @@ def eval_model(model, data_loader):
 
 
 # aggregrate the model
-def aggregrate_model(global_model, recieved_model, conf, e):
-    return flavg(global_model, recieved_model, conf, e)
-
-
-def flavg(global_model, recieved_model, conf, e):
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
-    # bring out the first K gradient
-    active_recieved = recieved_model[: conf["k"]]
-    # average without weight
-    global_gradient = global_model.state_dict()
-    for name, data in global_gradient.items():
-        global_gradient[name] = torch.zeros_like(data).to(device).float()
-    if conf["model_name"] == "resnet18":
-        gra = resnet_model.ResNet18(num=conf["CLASS_NUM"]).to(device)
-    elif conf["model_name"] == "vgg16":
-        gra = resnet_model.Vgg16(num=conf["CLASS_NUM"]).to(device)
-    elif conf["model_name"] == "CNN":
-        gra = resnet_model.CNN(num=conf["CLASS_NUM"]).to(device)
-    elif conf["model_name"] == "LSTM":
-        gra = resnet_model.LSTM(num=conf["CLASS_NUM"]).to(device)
+def aggregate_model(global_model, recieved_model, conf, e, args):
+    if args.aggregate == "flavg":
+        print("Using default aggregate mode(fl avg).")
+        return flavg(global_model, recieved_model, conf, e)
+    if args.aggregate == "randomk":
+        print("Using compr aggregate mode(fl randomk).")
+        return flrandomk(global_model, recieved_model, conf, e, args)
+    elif args.aggregate == "topk":
+        print("Using compr aggregate mode(fl topk).")
+        return fltopk(global_model, recieved_model, conf, e, args)
+    elif args.aggregate == "powersgd":
+        print("Using PowerSGD compr mode.")
+        return flpsgd(global_model, recieved_model, conf, e, args)
     else:
-        pass
-
-    print(active_recieved)
-    for name, data in global_model.state_dict().items():
-        for gra_way in active_recieved:
-            gra.load_state_dict(torch.load(gra_way[1]))
-            gra_state = gra.state_dict()
-            update_layer = gra_state[name] / conf["k"]
-            global_gradient[name] += update_layer
-
-        if data.type() != global_gradient[name].type():
-            global_gradient[name] = torch.round(global_gradient[name]).to(torch.int64)
-        else:
-            pass
-        data.copy_(global_gradient[name])
-
-    return global_model
+        print("Error: aggregate mode not found! Using default aggregate mode.")
+        return flavg(global_model, recieved_model, conf, e)
 
 
 # train model
 def train_model(model, optimizer, data_loader, conf, seq, args):
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.train()
     gra_dict = {}
     for name, data in model.state_dict().items():
@@ -112,20 +89,12 @@ def train_model(model, optimizer, data_loader, conf, seq, args):
         print("\t Client", seq, " finsh ", e, " epoches train! ")
 
     # communication with server
-    path = Path(__file__).parent / "sfl" / args.mode
+    path = Path(__file__).parent / "sfl" / args.aggregate
     filename = "gradient_" + str(seq) + ".pt"
     if not path.exists():
         path.mkdir()
-    print("Compression mode: %s" % args.mode)
     state_dict = model.state_dict()
-    if args.mode == "default":
-        pass
-    elif args.mode == "topk":
-        state_dict = topk(args.k, state_dict)
-    elif args.mode == "randomk":
-        state_dict = randomk(args.k, state_dict)
-    else:
-        print("Error: mode not found! Using default training mode.")
+    # filename = str(args.global_epoch) + "_" + filename
     torch.save(state_dict, path / filename)
 
     return model
@@ -137,19 +106,20 @@ def main():
     parser = argparse.ArgumentParser(description="Federated Learning")
     parser.add_argument("-c", "--conf", dest="conf")
     parser.add_argument(
-        "-m",
-        "--mode",
-        dest="mode",
-        default="default",
-        choices=["default", "topk", "randomk"],
-    )
-    parser.add_argument(
         "-k",
         "--k",
         dest="k",
         type=int,
-        default=1,
+        default=2,
         help="the k value of top-k or random-k, equal to r in PowerSGD",
+    )
+    parser.add_argument(
+        "-a",
+        "--aggregate",
+        dest="aggregate",
+        default="flavg",
+        choices=["flavg", "randomk", "topk", "powersgd"],
+        help="the aggregate mode, default is flavg",
     )
     args = parser.parse_args()
     with open(args.conf, "r", encoding="utf-8") as f:
@@ -162,10 +132,17 @@ def main():
 
     # set workers
     workers = conf["no_models"]  # amount
-
-    worker_conf = (
-        {}
-    )  # each worker's config: number(int) : [resource(int), data_lodaer(torch.loader), time_stamp(int), global_stamp(int), newest model(str)](list)
+    # each worker's config:
+    # {number(int) : [
+    #   resource(int),
+    #   data_lodaer(torch.loader),
+    #   time_stamp(int),
+    #   global_stamp(int),
+    #   newest model(str),
+    #   psgd_q_prev([tensor])
+    # ],
+    # }
+    worker_conf = {}
 
     for i in range(workers):
         resource = 1
@@ -177,14 +154,16 @@ def main():
             0,
             0,
             "./sfl/global_model_0.pt",
+            None,
         ]
+    args.worker_conf = worker_conf
 
     # workflow
     global_epoch = 0
     have_recieved_model = []
     time_clock = 0
     uploaded_model = 0
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # initialize the model
     if conf["model_name"] == "resnet18":
@@ -235,6 +214,7 @@ def main():
                     lr=conf["local_lr"],
                     momentum=conf["local_momentum"],
                 )
+                args.global_epoch = global_epoch
                 local_model = train_model(
                     local_model,
                     optimizer,
@@ -245,7 +225,13 @@ def main():
                 )
                 # compute the updation
                 print("Client ", client_seq_number, "finish train and upload gradient!")
-                gra = "./sfl/"+ args.mode + "/gradient_" + str(client_seq_number) + ".pt"
+                gra = (
+                    "./sfl/"
+                    + args.aggregate
+                    + "/gradient_"
+                    + str(client_seq_number)
+                    + ".pt"
+                )
                 have_recieved_model.append(
                     [client_seq_number, gra]
                 )  # update the model to server
@@ -282,17 +268,16 @@ def main():
                 recieved_amount,
             )
             # aggregrate
-            global_model = aggregrate_model(
-                global_model, have_recieved_model, conf, global_epoch
+            global_model = aggregate_model(
+                global_model, have_recieved_model, conf, global_epoch, args
             )
 
             with open(
-                "sflAvg_"
-                + (
-                    args.mode
-                    if args.mode not in ["topk", "randomk"]
-                    else args.mode + "_" + str(args.k)
-                )
+                "sfl_"
+                + str(args.k)
+                + "_"
+                + "aggre="
+                + args.aggregate
                 + "_"
                 + conf["model_name"]
                 + "_"
@@ -321,12 +306,11 @@ def main():
                 total_acc,
             )
             with open(
-                "sflAvg_"
-                + (
-                    args.mode
-                    if args.mode not in ["topk", "randomk"]
-                    else args.mode + "_" + str(args.k)
-                )
+                "sfl_"
+                + str(args.k)
+                + "_"
+                + "aggre="
+                + args.aggregate
                 + "_"
                 + conf["model_name"]
                 + "_"
