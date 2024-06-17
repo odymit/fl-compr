@@ -10,6 +10,10 @@ logs/*
 *.pkl
 *.csv
 
+*/nohup.out
+randomk
+topk
+
 .idea/*
 .vscode/*
 # ---------------------- python built-in ignores ------------------------------

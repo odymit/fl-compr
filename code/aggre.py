@@ -5,7 +5,9 @@ from tqdm import tqdm
 
 
 def powersgd_decompr(p, q):
-    return torch.mm(p, q.t())
+    ret = torch.mm(p, q.t())
+    print("decompr powersgd: ", ret)
+    return ret
 
 
 def orthogonalize(matrix: torch.Tensor, eps=torch.tensor(1e-16)):
@@ -30,10 +32,15 @@ def powersgd_compr(rank, matrix, epsilon=0.01):
     while error >= epsilon:
         # assume param in shape [n, m], then Q in shape [m, r]
         Q = Q.to(matrix.device)
+        print("Q: ", Q)
         P = torch.mm(matrix, Q)
+        print("P: ", P)
         P_hat = orthogonalize(P)
+        print("P_hat: ", P_hat)
         Q_new = torch.mm(matrix.t(), P_hat)
+        print("Q_new: ", Q_new)
         error = torch.norm(Q - Q_new)
+        print("error: ", error)
         Q = Q_new
     bytes += P_hat.numel() * P_hat.element_size() + Q.numel() * Q.element_size()
     print("Bytes of PowerSGD: ", bytes)
@@ -41,7 +48,7 @@ def powersgd_compr(rank, matrix, epsilon=0.01):
 
 
 def flpsgd(global_model, recieved_model, conf, e, args):
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # bring out the first K gradient
     active_recieved = recieved_model[: conf["k"]]
     # average without weight
@@ -67,7 +74,7 @@ def flpsgd(global_model, recieved_model, conf, e, args):
             gra_state = gra.state_dict()
             param = gra_state[name]
 
-            gradient = gra_state[name] - global_gradient[name]
+            gradient = gra_state[name]# - global_gradient[name]
             if gradient.ndim <= 1:
                 # if ndim <= 1, take it uncompressed
                 update_layer = gradient / conf["k"]
@@ -78,7 +85,7 @@ def flpsgd(global_model, recieved_model, conf, e, args):
             print("gradient shape: ", gradient.shape)
             matrix = gradient.view(gradient.shape[0], -1)
             P, Q = powersgd_compr(k, matrix)
-            update_layer = gradient / conf["k"]
+            update_layer = powersgd_decompr(P, Q).view(gradient.shape) / conf["k"]
             global_gradient[name] += update_layer
         if data.type() != global_gradient[name].type():
             global_gradient[name] = torch.round(global_gradient[name]).to(torch.int64)
@@ -89,7 +96,7 @@ def flpsgd(global_model, recieved_model, conf, e, args):
 
 
 def fltopk(global_model, recieved_model, conf, e, args):
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # bring out the first K gradient
     active_recieved = recieved_model[: conf["k"]]
     # average without weight
@@ -147,7 +154,7 @@ def fltopk(global_model, recieved_model, conf, e, args):
 
 
 def flrandomk(global_model, recieved_model, conf, e, args):
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # bring out the first K gradient
     active_recieved = recieved_model[: conf["k"]]
     # average without weight
@@ -207,7 +214,7 @@ def flrandomk(global_model, recieved_model, conf, e, args):
 
 
 def flavg(global_model, recieved_model, conf, e):
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # bring out the first K gradient
     active_recieved = recieved_model[: conf["k"]]
     # average without weight
