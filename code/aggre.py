@@ -1,3 +1,7 @@
+import json
+import os
+from time import time
+
 import numpy as np
 import resnet_model
 import torch
@@ -6,7 +10,7 @@ from tqdm import tqdm
 
 def powersgd_decompr(p, q):
     ret = torch.mm(p, q.t())
-    print("decompr powersgd: ", ret)
+    # print("decompr powersgd: ", ret)
     return ret
 
 
@@ -26,24 +30,21 @@ def init_Q(matrix, rank):
 
 def powersgd_compr(rank, matrix, epsilon=0.01):
     """do the compression and return the P and Q"""
-    bytes = 0
     error = np.Inf
     Q = init_Q(matrix, rank)
     while error >= epsilon:
         # assume param in shape [n, m], then Q in shape [m, r]
         Q = Q.to(matrix.device)
-        print("Q: ", Q)
+        # print("Q: ", Q)
         P = torch.mm(matrix, Q)
-        print("P: ", P)
+        # print("P: ", P)
         P_hat = orthogonalize(P)
-        print("P_hat: ", P_hat)
+        # print("P_hat: ", P_hat)
         Q_new = torch.mm(matrix.t(), P_hat)
-        print("Q_new: ", Q_new)
+        # print("Q_new: ", Q_new)
         error = torch.norm(Q - Q_new)
-        print("error: ", error)
+        # print("error: ", error)
         Q = Q_new
-    bytes += P_hat.numel() * P_hat.element_size() + Q.numel() * Q.element_size()
-    print("Bytes of PowerSGD: ", bytes)
     return P_hat, Q
 
 
@@ -68,30 +69,75 @@ def flpsgd(global_model, recieved_model, conf, e, args):
 
     k = args.k
     print(active_recieved)
+    org_bytes = 0
+    bytes = 0
+    error = 0
+    time_cost = 0
     for name, data in global_model.state_dict().items():
         for gra_way in active_recieved:
             gra.load_state_dict(torch.load(gra_way[1]))
             gra_state = gra.state_dict()
             param = gra_state[name]
+            org_bytes += param.numel() * param.element_size()
+            start = time()
 
-            gradient = gra_state[name]# - global_gradient[name]
-            if gradient.ndim <= 1:
+            # do the compression
+            if args.gradient:
+                info = gra_state[name] - global_gradient[name]
+            else:
+                info = gra_state[name]
+
+            if info.ndim <= 1:
                 # if ndim <= 1, take it uncompressed
-                update_layer = gradient / conf["k"]
+                update_layer = info / conf["k"]
                 global_gradient[name] += update_layer
                 continue
 
             # get P & Q
-            print("gradient shape: ", gradient.shape)
-            matrix = gradient.view(gradient.shape[0], -1)
+            # print("gradient shape: ", info.shape)
+            matrix = info.view(info.shape[0], -1)
             P, Q = powersgd_compr(k, matrix)
-            update_layer = powersgd_decompr(P, Q).view(gradient.shape) / conf["k"]
+            # counting time
+            end = time()
+            duration = end - start
+            time_cost += duration
+            # counting bytes
+            bytes += P.numel() * P.element_size() + Q.numel() * Q.element_size()
+            # counting error
+            error += torch.norm(matrix - powersgd_decompr(P, Q)).pow(2)
+
+            # update the global gradient
+            update_layer = powersgd_decompr(P, Q).view(info.shape) / conf["k"]
             global_gradient[name] += update_layer
         if data.type() != global_gradient[name].type():
             global_gradient[name] = torch.round(global_gradient[name]).to(torch.int64)
         else:
             pass
         data.copy_(global_gradient[name])
+
+    # save the logs
+    if not os.path.exists("powersgd.log"):
+        with open("powersgd.log", "w") as f:
+            logs = {}
+            json.dump(logs, f)
+    print("path of powersgd.log: ", os.path.abspath("powersgd.log"))
+    old_logs = {}
+    with open("powersgd.log", "r") as f:
+        logs = {}
+        logs[args.global_epoch] = {}
+        logs[args.global_epoch]["org_bytes"] = org_bytes
+        logs[args.global_epoch]["bytes"] = bytes
+        logs[args.global_epoch]["error"] = error.sqrt().item()
+        logs[args.global_epoch]["time_cost"] = time_cost
+
+        old_logs = json.load(f)
+        old_logs.update(logs)
+    with open("powersgd.log", "w") as f:
+        json.dump(old_logs, f)
+    print("Bytes before compression of PowerSGD: ", org_bytes)
+    print("Bytes after compression of PowerSGD: ", bytes)
+    print("Error of PowerSGD: ", error.sqrt().item())
+    print("Time cost of compression: ", time_cost)
     return global_model
 
 
@@ -116,11 +162,17 @@ def fltopk(global_model, recieved_model, conf, e, args):
 
     print(active_recieved)
     k = args.k
+    org_bytes = 0
+    bytes = 0
+    error = 0
+    time_cost = 0
     for name, data in tqdm(global_model.state_dict().items(), desc="aggregating"):
         for gra_way in active_recieved:
             gra.load_state_dict(torch.load(gra_way[1]))
             gra_state = gra.state_dict()
             param = gra_state[name]
+            org_bytes += param.numel() * param.element_size()
+            start = time()
 
             gradient = gra_state[name] - global_gradient[name]
             if param.ndim > 1:
@@ -140,6 +192,14 @@ def fltopk(global_model, recieved_model, conf, e, args):
             flat_mask = mask.view(-1)
             flat_mask[topk_indices] = 1
             mask = mask.bool()
+            # counting time
+            end = time()
+            duration = end - start
+            time_cost += duration
+            # counting bytes
+            bytes += mask.sum().item() * param.element_size()
+            # counting error
+            error += torch.norm(param - param[mask]).pow(2)
             # g1 = 1/2(c1-g0)*mask1 + 1/2(c2-g0)*mask2 + g0
             update_layer = gradient / conf["k"]
             global_gradient[name][mask] += update_layer[mask]
@@ -150,6 +210,29 @@ def fltopk(global_model, recieved_model, conf, e, args):
             pass
         data.copy_(global_gradient[name])
 
+    # save the logs
+    if not os.path.exists("topk.log"):
+        with open("topk.log", "w") as f:
+            logs = {}
+            json.dump(logs, f)
+    print("path of topk.log: ", os.path.abspath("topk.log"))
+    old_logs = {}
+    with open("topk.log", "r") as f:
+        logs = {}
+        logs[args.global_epoch] = {}
+        logs[args.global_epoch]["org_bytes"] = org_bytes
+        logs[args.global_epoch]["bytes"] = bytes
+        logs[args.global_epoch]["error"] = error.sqrt().item()
+        logs[args.global_epoch]["time_cost"] = time_cost
+
+        old_logs = json.load(f)
+        old_logs.update(logs)
+    with open("topk.log", "w") as f:
+        json.dump(old_logs, f)
+    print("Bytes before compression of TopK: ", org_bytes)
+    print("Bytes after compression of TopK: ", bytes)
+    print("Error of TopK: ", error.sqrt().item())
+    print("Time cost of compression: ", time_cost)
     return global_model
 
 
@@ -174,11 +257,17 @@ def flrandomk(global_model, recieved_model, conf, e, args):
 
     print(active_recieved)
     k = args.k
+    org_bytes = 0
+    bytes = 0
+    error = 0
+    time_cost = 0
     for name, data in tqdm(global_model.state_dict().items(), desc="aggregating"):
         for gra_way in active_recieved:
             gra.load_state_dict(torch.load(gra_way[1]))
             gra_state = gra.state_dict()
             param = gra_state[name]
+            org_bytes += param.numel() * param.element_size()
+            start = time()
 
             gradient = gra_state[name] - global_gradient[name]
             if param.ndim > 1:
@@ -200,6 +289,14 @@ def flrandomk(global_model, recieved_model, conf, e, args):
             flat_mask = mask.view(-1)
             flat_mask[randomk_indices] = 1
             mask = mask.bool()
+            # counting time
+            end = time()
+            duration = end - start
+            time_cost += duration
+            # counting bytes
+            bytes += mask.sum().item() * param.element_size()
+            # counting error
+            error += torch.norm(param - param[mask]).pow(2)
             # g1 = 1/2(c1-g0)*mask1 + 1/2(c2-g0)*mask2 + g0
             update_layer = gradient / conf["k"]
             global_gradient[name][mask] += update_layer[mask]
@@ -210,6 +307,29 @@ def flrandomk(global_model, recieved_model, conf, e, args):
             pass
         data.copy_(global_gradient[name])
 
+    # save the logs
+    if not os.path.exists("randomk.log"):
+        with open("randomk.log", "w") as f:
+            logs = {}
+            json.dump(logs, f)
+    print("path of randomk.log: ", os.path.abspath("randomk.log"))
+    old_logs = {}
+    with open("randomk.log", "r") as f:
+        logs = {}
+        logs[args.global_epoch] = {}
+        logs[args.global_epoch]["org_bytes"] = org_bytes
+        logs[args.global_epoch]["bytes"] = bytes
+        logs[args.global_epoch]["error"] = error.sqrt().item()
+        logs[args.global_epoch]["time_cost"] = time_cost
+
+        old_logs = json.load(f)
+        old_logs.update(logs)
+    with open("randomk.log", "w") as f:
+        json.dump(old_logs, f)
+    print("Bytes before compression of RandomK: ", org_bytes)
+    print("Bytes after compression of RandomK: ", bytes)
+    print("Error of RandomK: ", error.sqrt().item())
+    print("Time cost of compression: ", time_cost)
     return global_model
 
 

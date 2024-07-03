@@ -121,6 +121,9 @@ def main():
         choices=["flavg", "randomk", "topk", "powersgd"],
         help="the aggregate mode, default is flavg",
     )
+    parser.add_argument(
+        "--gradient", default=False, action="store_true", help="just for the weight communication method"
+    )
     args = parser.parse_args()
     with open(args.conf, "r", encoding="utf-8") as f:
         conf = json.load(f)
