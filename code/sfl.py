@@ -7,7 +7,7 @@ from pathlib import Path
 
 import resnet_model
 import torch
-from aggre import flavg, flpsgd, flrandomk, fltopk
+from aggre import flavg, flpsgd, flrandomblock, flrandomk, fltopk
 from data_pre import get_dataset
 
 
@@ -50,6 +50,9 @@ def aggregate_model(global_model, recieved_model, conf, e, args):
     if args.aggregate == "randomk":
         print("Using compr aggregate mode(fl randomk).")
         return flrandomk(global_model, recieved_model, conf, e, args)
+    elif args.aggregate == "randomblock":
+        print("Using compr aggregate mode(fl randomblock).")
+        return flrandomblock(global_model, recieved_model, conf, e, args)
     elif args.aggregate == "topk":
         print("Using compr aggregate mode(fl topk).")
         return fltopk(global_model, recieved_model, conf, e, args)
@@ -118,11 +121,14 @@ def main():
         "--aggregate",
         dest="aggregate",
         default="flavg",
-        choices=["flavg", "randomk", "topk", "powersgd"],
+        choices=["flavg", "randomk", "randomblock", "topk", "powersgd"],
         help="the aggregate mode, default is flavg",
     )
     parser.add_argument(
-        "--gradient", default=False, action="store_true", help="just for the weight communication method"
+        "--gradient",
+        default=False,
+        action="store_true",
+        help="just for the weight communication method",
     )
     args = parser.parse_args()
     with open(args.conf, "r", encoding="utf-8") as f:

@@ -1,5 +1,6 @@
 import json
 import os
+import random
 from time import time
 
 import numpy as np
@@ -199,7 +200,9 @@ def fltopk(global_model, recieved_model, conf, e, args):
             # counting bytes
             bytes += mask.sum().item() * param.element_size()
             # counting error
-            error += torch.norm(param - param[mask]).pow(2)
+            matrix = torch.zeros_like(param)
+            matrix[mask] = param[mask]
+            error += torch.norm(param - matrix).pow(2).item()
             # g1 = 1/2(c1-g0)*mask1 + 1/2(c2-g0)*mask2 + g0
             update_layer = gradient / conf["k"]
             global_gradient[name][mask] += update_layer[mask]
@@ -217,6 +220,7 @@ def fltopk(global_model, recieved_model, conf, e, args):
             json.dump(logs, f)
     print("path of topk.log: ", os.path.abspath("topk.log"))
     old_logs = {}
+    error = torch.tensor(error)
     with open("topk.log", "r") as f:
         logs = {}
         logs[args.global_epoch] = {}
@@ -296,7 +300,9 @@ def flrandomk(global_model, recieved_model, conf, e, args):
             # counting bytes
             bytes += mask.sum().item() * param.element_size()
             # counting error
-            error += torch.norm(param - param[mask]).pow(2)
+            matrix = torch.zeros_like(param)
+            matrix[mask] = param[mask]
+            error += torch.norm(param - matrix).pow(2).item()
             # g1 = 1/2(c1-g0)*mask1 + 1/2(c2-g0)*mask2 + g0
             update_layer = gradient / conf["k"]
             global_gradient[name][mask] += update_layer[mask]
@@ -314,6 +320,108 @@ def flrandomk(global_model, recieved_model, conf, e, args):
             json.dump(logs, f)
     print("path of randomk.log: ", os.path.abspath("randomk.log"))
     old_logs = {}
+    error = torch.tensor(error)
+    with open("randomk.log", "r") as f:
+        logs = {}
+        logs[args.global_epoch] = {}
+        logs[args.global_epoch]["org_bytes"] = org_bytes
+        logs[args.global_epoch]["bytes"] = bytes
+        logs[args.global_epoch]["error"] = error.sqrt().item()
+        logs[args.global_epoch]["time_cost"] = time_cost
+
+        old_logs = json.load(f)
+        old_logs.update(logs)
+    with open("randomk.log", "w") as f:
+        json.dump(old_logs, f)
+    print("Bytes before compression of RandomK: ", org_bytes)
+    print("Bytes after compression of RandomK: ", bytes)
+    print("Error of RandomK: ", error.sqrt().item())
+    print("Time cost of compression: ", time_cost)
+    return global_model
+
+
+def flrandomblock(global_model, recieved_model, conf, e, args):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # bring out the first K gradient
+    active_recieved = recieved_model[: conf["k"]]
+    # average without weight
+    global_gradient = global_model.state_dict()
+    for name, data in global_gradient.items():
+        global_gradient[name] = data.to(device).float()
+    if conf["model_name"] == "resnet18":
+        gra = resnet_model.ResNet18(num=conf["CLASS_NUM"]).to(device)
+    elif conf["model_name"] == "vgg16":
+        gra = resnet_model.Vgg16(num=conf["CLASS_NUM"]).to(device)
+    elif conf["model_name"] == "CNN":
+        gra = resnet_model.CNN(num=conf["CLASS_NUM"]).to(device)
+    elif conf["model_name"] == "LSTM":
+        gra = resnet_model.LSTM(num=conf["CLASS_NUM"]).to(device)
+    else:
+        pass
+
+    print(active_recieved)
+    k = args.k
+    org_bytes = 0
+    bytes = 0
+    error = 0
+    time_cost = 0
+    for name, data in tqdm(global_model.state_dict().items(), desc="aggregating"):
+        for gra_way in active_recieved:
+            gra.load_state_dict(torch.load(gra_way[1]))
+            gra_state = gra.state_dict()
+            param = gra_state[name]
+            org_bytes += param.numel() * param.element_size()
+            start = time()
+
+            gradient = gra_state[name] - global_gradient[name]
+            if param.ndim > 1:
+                # get (m+n)*k if param have a shape of [m, n]
+                real_k = sum(list(param.shape)) * k
+            else:
+                # if ndim == 1, take it uncompressed
+                update_layer = gradient / conf["k"]
+                global_gradient[name] += update_layer
+                continue
+
+            # get random k indices
+            flat_param = gradient.view(-1)
+            num_elements = flat_param.numel()
+            # perm = torch.randperm(num_elements)
+            s = random.randint(0, num_elements - real_k - 1)
+            randomk_indices = torch.tensor([s + i for i in range(real_k)])
+            # get mask
+            mask = torch.zeros_like(gradient)
+            flat_mask = mask.view(-1)
+            flat_mask[randomk_indices] = 1
+            mask = mask.bool()
+            # counting time
+            end = time()
+            duration = end - start
+            time_cost += duration
+            # counting bytes
+            bytes += mask.sum().item() * param.element_size()
+            # counting error
+            matrix = torch.zeros_like(param)
+            matrix[mask] = param[mask]
+            error += torch.norm(param - matrix).pow(2).item()
+            # g1 = 1/2(c1-g0)*mask1 + 1/2(c2-g0)*mask2 + g0
+            update_layer = gradient / conf["k"]
+            global_gradient[name][mask] += update_layer[mask]
+
+        if data.type() != global_gradient[name].type():
+            global_gradient[name] = torch.round(global_gradient[name]).to(torch.int64)
+        else:
+            pass
+        data.copy_(global_gradient[name])
+
+    # save the logs
+    if not os.path.exists("randomk.log"):
+        with open("randomk.log", "w") as f:
+            logs = {}
+            json.dump(logs, f)
+    print("path of randomk.log: ", os.path.abspath("randomk.log"))
+    old_logs = {}
+    error = torch.tensor(error)
     with open("randomk.log", "r") as f:
         logs = {}
         logs[args.global_epoch] = {}
