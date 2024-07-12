@@ -138,13 +138,15 @@ def flpsgd(global_model, recieved_model, conf, e, args):
         data.copy_(global_gradient[name])
 
     # save the logs
-    if not os.path.exists("powersgd.log"):
-        with open("powersgd.log", "w") as f:
+    filename = "powersgd_results.json"
+    if not os.path.exists(filename):
+        with open("powersgd_results.json", "w") as f:
             logs = {}
             json.dump(logs, f)
-    print("path of powersgd.log: ", os.path.abspath("powersgd.log"))
+    print("path of powersgd results: ", os.path.abspath(filename))
+    # load old logs
     old_logs = {}
-    with open("powersgd.log", "r") as f:
+    with open(filename, "r") as f:
         logs = {}
         logs[args.global_epoch] = {}
         logs[args.global_epoch]["org_bytes"] = org_bytes
@@ -154,7 +156,8 @@ def flpsgd(global_model, recieved_model, conf, e, args):
 
         old_logs = json.load(f)
         old_logs.update(logs)
-    with open("powersgd.log", "w") as f:
+    # append and save new logs
+    with open(filename, "w") as f:
         json.dump(old_logs, f)
     print("Bytes before compression of PowerSGD: ", org_bytes)
     print("Bytes after compression of PowerSGD: ", bytes)
@@ -235,14 +238,15 @@ def fltopk(global_model, recieved_model, conf, e, args):
         data.copy_(global_gradient[name])
 
     # save the logs
-    if not os.path.exists("topk.log"):
-        with open("topk.log", "w") as f:
+    filename = "topk_results.json"
+    if not os.path.exists(filename):
+        with open(filename, "w") as f:
             logs = {}
             json.dump(logs, f)
-    print("path of topk.log: ", os.path.abspath("topk.log"))
+    print("path of topk results: ", os.path.abspath(filename))
     old_logs = {}
     error = torch.tensor(error)
-    with open("topk.log", "r") as f:
+    with open(filename, "r") as f:
         logs = {}
         logs[args.global_epoch] = {}
         logs[args.global_epoch]["org_bytes"] = org_bytes
@@ -252,7 +256,7 @@ def fltopk(global_model, recieved_model, conf, e, args):
 
         old_logs = json.load(f)
         old_logs.update(logs)
-    with open("topk.log", "w") as f:
+    with open(filename, "w") as f:
         json.dump(old_logs, f)
     print("Bytes before compression of TopK: ", org_bytes)
     print("Bytes after compression of TopK: ", bytes)
@@ -335,14 +339,15 @@ def flrandomk(global_model, recieved_model, conf, e, args):
         data.copy_(global_gradient[name])
 
     # save the logs
-    if not os.path.exists("randomk.log"):
-        with open("randomk.log", "w") as f:
+    filename = "randomk_results.json"
+    if not os.path.exists(filename):
+        with open(filename, "w") as f:
             logs = {}
             json.dump(logs, f)
-    print("path of randomk.log: ", os.path.abspath("randomk.log"))
+    print("path of randomk results: ", os.path.abspath(filename))
     old_logs = {}
     error = torch.tensor(error)
-    with open("randomk.log", "r") as f:
+    with open(filename, "r") as f:
         logs = {}
         logs[args.global_epoch] = {}
         logs[args.global_epoch]["org_bytes"] = org_bytes
@@ -352,7 +357,7 @@ def flrandomk(global_model, recieved_model, conf, e, args):
 
         old_logs = json.load(f)
         old_logs.update(logs)
-    with open("randomk.log", "w") as f:
+    with open(filename, "w") as f:
         json.dump(old_logs, f)
     print("Bytes before compression of RandomK: ", org_bytes)
     print("Bytes after compression of RandomK: ", bytes)
@@ -436,14 +441,15 @@ def flrandomblock(global_model, recieved_model, conf, e, args):
         data.copy_(global_gradient[name])
 
     # save the logs
-    if not os.path.exists("randomk.log"):
-        with open("randomk.log", "w") as f:
+    filename = "randomblock_results.json"
+    if not os.path.exists(filename):
+        with open(filename, "w") as f:
             logs = {}
             json.dump(logs, f)
-    print("path of randomk.log: ", os.path.abspath("randomk.log"))
+    print("path of randomk block results: ", os.path.abspath(filename))
     old_logs = {}
     error = torch.tensor(error)
-    with open("randomk.log", "r") as f:
+    with open(filename, "r") as f:
         logs = {}
         logs[args.global_epoch] = {}
         logs[args.global_epoch]["org_bytes"] = org_bytes
@@ -453,7 +459,7 @@ def flrandomblock(global_model, recieved_model, conf, e, args):
 
         old_logs = json.load(f)
         old_logs.update(logs)
-    with open("randomk.log", "w") as f:
+    with open(filename, "w") as f:
         json.dump(old_logs, f)
     print("Bytes before compression of RandomK: ", org_bytes)
     print("Bytes after compression of RandomK: ", bytes)

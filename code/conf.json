@@ -4,7 +4,7 @@
 	"type": "cifar10",
 	"CLASS_NUM": 10,
 	"clip": 20,
-	"global_epochs": 1200,
+	"global_epochs": 1500,
 	"local_epochs": 2,
 	"k": 10,
 	"batch_size": 50,

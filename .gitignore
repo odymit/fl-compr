@@ -1,3 +1,4 @@
+backup/*
 legacy/*
 dataset/*
 data/*
@@ -11,8 +12,11 @@ logs/*
 *.csv
 
 */nohup.out
-randomk
-topk
+run_flavg
+run_powersgd
+run_randomk
+run_topk
+run_randomblock
 
 .idea/*
 .vscode/*
