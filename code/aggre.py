@@ -1,6 +1,7 @@
 import json
 import os
 import random
+from math import prod
 from time import time
 
 import numpy as np
@@ -47,6 +48,22 @@ def powersgd_compr(rank, matrix, epsilon=0.01):
         # print("error: ", error)
         Q = Q_new
     return P_hat, Q
+
+
+def crack(integer):
+    start = int(np.sqrt(integer))
+    factor = integer / start
+
+    def is_integer(x):
+        if x == int(x):
+            return True
+        else:
+            return False
+
+    while not is_integer(factor):
+        start += 1
+        factor = integer / start
+    return start, int(factor)
 
 
 def flpsgd(global_model, recieved_model, conf, e, args):
@@ -96,7 +113,11 @@ def flpsgd(global_model, recieved_model, conf, e, args):
 
             # get P & Q
             # print("gradient shape: ", info.shape)
-            matrix = info.view(info.shape[0], -1)
+            if args.square:
+                row, col = crack(prod(list(info.shape)))
+            else:
+                row, col = info.shape[0], -1
+            matrix = info.view(row, col)
             P, Q = powersgd_compr(k, matrix)
             # counting time
             end = time()

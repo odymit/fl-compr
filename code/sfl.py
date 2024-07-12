@@ -130,6 +130,12 @@ def main():
         action="store_true",
         help="just for the weight communication method",
     )
+    parser.add_argument(
+        "--square",
+        default=False,
+        action="store_true",
+        help="just for the flpsgd method",
+    )
     args = parser.parse_args()
     with open(args.conf, "r", encoding="utf-8") as f:
         conf = json.load(f)
