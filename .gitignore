@@ -17,6 +17,7 @@ run_powersgd
 run_randomk
 run_topk
 run_randomblock
+run_*
 
 .idea/*
 .vscode/*
