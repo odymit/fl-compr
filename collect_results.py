@@ -16,3 +16,5 @@ for item in Path(__file__).parent.iterdir():
             shutil.copy(file, result_dir / file.name)
         if "result" in file.name and file.suffix == ".json":
             shutil.copy(file, result_dir / file.name)
+        if "result" in file.name and file.suffix == ".png":
+            shutil.copy(file, result_dir / file.name)

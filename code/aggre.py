@@ -118,6 +118,18 @@ def flpsgd(global_model, recieved_model, conf, e, args):
             else:
                 row, col = info.shape[0], -1
             matrix = info.view(row, col)
+
+            # get the error feedback
+            if args.error_feedback:
+                global efm
+                print(efm.keys())
+                # name in efm, it has previous error feedback value
+                if name in efm:
+                    matrix += efm[name]
+                # name not in efm, have not initialize the efm of name
+                else:
+                    efm[name] = torch.zeros_like(matrix)
+
             P, Q = powersgd_compr(k, matrix)
             # counting time
             end = time()
@@ -125,11 +137,16 @@ def flpsgd(global_model, recieved_model, conf, e, args):
             time_cost += duration
             # counting bytes
             bytes += P.numel() * P.element_size() + Q.numel() * Q.element_size()
+            matrix_decompr = powersgd_decompr(P, Q)
             # counting error
-            error += torch.norm(matrix - powersgd_decompr(P, Q)).pow(2)
+            error += torch.norm(matrix - matrix_decompr).pow(2)
 
+            # update error feedback
+            if args.error_feedback:
+                print("updating efm")
+                efm[name] = matrix - matrix_decompr
             # update the global gradient
-            update_layer = powersgd_decompr(P, Q).view(info.shape) / conf["k"]
+            update_layer = matrix_decompr.view(info.shape) / conf["k"]
             global_gradient[name] += update_layer
         if data.type() != global_gradient[name].type():
             global_gradient[name] = torch.round(global_gradient[name]).to(torch.int64)

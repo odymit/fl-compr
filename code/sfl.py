@@ -136,6 +136,13 @@ def main():
         action="store_true",
         help="just for the flpsgd method",
     )
+    parser.add_argument(
+        "--error_feedback",
+        dest="error_feedback",
+        default=False,
+        action="store_true",
+        help="trigger the error feedback",
+    )
     args = parser.parse_args()
     with open(args.conf, "r", encoding="utf-8") as f:
         conf = json.load(f)
@@ -363,4 +370,7 @@ def main():
 
 
 if __name__ == "__main__":
+    sfl_path = Path(__file__).parent / "sfl"
+    if not sfl_path.exists():
+        sfl_path.mkdir()
     main()
