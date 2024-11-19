@@ -7,7 +7,7 @@ from pathlib import Path
 
 import resnet_model
 import torch
-from aggre import flavg, flpsgd, flrandomblock, flrandomk, fltopk
+from aggre import flavg, flavg_hierarchy_aggr, flpsgd, flrandomblock, flrandomk, fltopk
 from data_pre import get_dataset
 
 
@@ -46,7 +46,10 @@ def eval_model(model, data_loader):
 def aggregate_model(global_model, recieved_model, conf, e, args):
     if args.aggregate == "flavg":
         print("Using default aggregate mode(fl avg).")
-        return flavg(global_model, recieved_model, conf, e)
+        if args.hierarchy:
+            return flavg_hierarchy_aggr(global_model, recieved_model, conf, e, args)
+        else:
+            return flavg(global_model, recieved_model, conf, e)
     if args.aggregate == "randomk":
         print("Using compr aggregate mode(fl randomk).")
         return flrandomk(global_model, recieved_model, conf, e, args)
@@ -142,6 +145,12 @@ def main():
         default=False,
         action="store_true",
         help="trigger the error feedback",
+    )
+    parser.add_argument(
+        "--hierarchy",
+        default=False,
+        action="store_true",
+        help="if use hierarchy aggregation structure",
     )
     args = parser.parse_args()
     with open(args.conf, "r", encoding="utf-8") as f:

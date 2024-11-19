@@ -519,3 +519,94 @@ def flavg(global_model, recieved_model, conf, e):
         data.copy_(global_gradient[name])
 
     return global_model
+
+
+def flavg_hierarchy_aggr(global_model, recieved_model, conf, e, args):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("args:", args)
+    # bring out the first K gradient
+    active_recieved = recieved_model[: conf["k"]]
+    # average without weight
+    global_gradient = global_model.state_dict()
+    for name, data in global_gradient.items():
+        global_gradient[name] = torch.zeros_like(data).to(device).float()
+    if conf["model_name"] == "resnet18":
+        gra = resnet_model.ResNet18(num=conf["CLASS_NUM"]).to(device)
+    elif conf["model_name"] == "vgg16":
+        gra = resnet_model.Vgg16(num=conf["CLASS_NUM"]).to(device)
+    elif conf["model_name"] == "CNN":
+        gra = resnet_model.CNN(num=conf["CLASS_NUM"]).to(device)
+    elif conf["model_name"] == "LSTM":
+        gra = resnet_model.LSTM(num=conf["CLASS_NUM"]).to(device)
+    else:
+        pass
+
+    print("active_recieved: ", active_recieved)
+    active_worker_idx_lst = []
+    for idx, path in active_recieved:
+        active_worker_idx_lst.append(idx)
+    # if there are 20 clients, and 10 are at least selected
+    # split group
+    # assume groups k = 4
+    k_groups = 4
+    num_workers_in_each_grpus = len(args.worker_conf) // k_groups
+    group_to_workers = [[] * k_groups]
+    group_idx = 1
+    while group_idx <= k_groups:
+        start = (group_idx - 1) * num_workers_in_each_grpus
+        end = group_idx * num_workers_in_each_grpus
+        if group_idx == k_groups:
+            end = len(args.worker_conf)
+        for worker_idx in range(start, end):
+            if worker_idx in active_worker_idx_lst:
+                group_to_workers[group_idx - 1].append(worker_idx)
+        group_idx += 1
+
+    print("splited workers: ", group_to_workers)
+
+    def get_gra_path(active_recieved, worker_idx):
+        for idx, path in active_recieved:
+            if idx == worker_idx:
+                return path
+        else:
+            raise FileNotFoundError(
+                "worker_idx: {idx} not found in {path}.".format(
+                    idx=worker_idx, path=str(active_recieved)
+                )
+            )
+
+    for name, data in global_model.state_dict().items():
+        ds_idx_to_gra_state_dict = {}
+        # aggregate edge group
+        for group_idx in range(k_groups):
+            worker_idx_lst_in_cur_group = group_to_workers[group_idx]
+            length = len(worker_idx_lst_in_cur_group)
+            if length == 0:
+                ds_idx_to_gra_state_dict.update({group_idx: None})
+            elif length == 1:
+                gra_path = get_gra_path(active_recieved, worker_idx_lst_in_cur_group[0])
+                gra.load_state_dict(torch.load(gra_path))
+                gra_state = gra.state_dict()
+                ds_idx_to_gra_state_dict.update({group_idx: gra_state[name]})
+            else:
+                edge_aggr_layer = None
+                for i in worker_idx_lst_in_cur_group:
+                    gra_path = get_gra_path(active_recieved, i)
+                    gra.load_state_dict(torch.load(gra_path))
+                    gra_state = gra.state_dict()
+                    if not edge_aggr_layer:
+                        edge_aggr_layer = torch.zeros_like(gra_state[name])
+                    update_layer = gra_state[name] / length
+                    edge_aggr_layer += update_layer
+                ds_idx_to_gra_state_dict.update({group_idx: edge_aggr_layer})
+        # aggregate central
+        for update_layer in ds_idx_to_gra_state_dict.values():
+            global_gradient[name] += update_layer
+
+        if data.type() != global_gradient[name].type():
+            global_gradient[name] = torch.round(global_gradient[name]).to(torch.int64)
+        else:
+            pass
+        data.copy_(global_gradient[name])
+
+    return global_model
